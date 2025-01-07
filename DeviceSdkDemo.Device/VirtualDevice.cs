@@ -2,7 +2,6 @@
 using Microsoft.Azure.Devices.Shared;
 using Newtonsoft.Json;
 using System.Net.Mime;
-using System.Net.Sockets;
 using System.Text;
 using Opc.UaFx;
 using Opc.UaFx.Client;
@@ -20,138 +19,130 @@ namespace DeviceSdkDemo.Device
             this.opcClient = new OpcClient(opcServerUrl);
             this.opcClient.Connect();
         }
+
+        #region OPC UA Node Mapping
+        private const string ProductionStatusNode = "ns=2;s=Device 1/ProductionStatus";
+        private const string WorkorderIdNode = "ns=2;s=Device 1/WorkorderId";
+        private const string ProductionRateNode = "ns=2;s=Device 1/ProductionRate";
+        private const string GoodCountNode = "ns=2;s=Device 1/GoodCount";
+        private const string BadCountNode = "ns=2;s=Device 1/BadCount";
+        private const string TemperatureNode = "ns=2;s=Device 1/Temperature";
+        private const string DeviceErrorNode = "ns=2;s=Device 1/DeviceError";
+        private const string EmergencyStopNode = "ns=2;s=Device 1/EmergencyStop";
+        #endregion
+
+        #region Telemetry Data Reading
         private Dictionary<string, object> ReadTelemetryData()
         {
-            var telemetryData = new Dictionary<string, object>();
-
-            OpcValue productionStatus = opcClient.ReadNode("ns=2;s=Device 1/ProductionStatus");
-            OpcValue productionRate = opcClient.ReadNode("ns=2;s=Device 1/ProductionRate");
-            OpcValue temperature = opcClient.ReadNode("ns=2;s=Device 1/Temperature");
-            OpcValue goodCount = opcClient.ReadNode("ns=2;s=Device 1/GoodCount");
-            OpcValue badCount = opcClient.ReadNode("ns=2;s=Device 1/BadCount");
-
-            telemetryData["ProductionStatus"] = productionStatus.Value;
-            telemetryData["ProductionRate"] = productionRate.Value;
-            telemetryData["Temperature"] = temperature.Value;
-            telemetryData["GoodCount"] = goodCount.Value;
-            telemetryData["BadCount"] = badCount.Value;
-
-            return telemetryData;
+            return new Dictionary<string, object>
+            {
+                ["ProductionStatus"] = opcClient.ReadNode(ProductionStatusNode).Value,
+                ["WorkorderId"] = opcClient.ReadNode(WorkorderIdNode).Value,
+                ["ProductionRate"] = opcClient.ReadNode(ProductionRateNode).Value,
+                ["GoodCount"] = opcClient.ReadNode(GoodCountNode).Value,
+                ["BadCount"] = opcClient.ReadNode(BadCountNode).Value,
+                ["Temperature"] = opcClient.ReadNode(TemperatureNode).Value
+            };
         }
+        #endregion
 
         #region Sending Messages
 
         public async Task SendMessages(int nrOfMessages, int delay)
         {
-            Console.WriteLine($"Device sending {nrOfMessages} messages to IoTHub...\n");
-
             for (int count = 0; count < nrOfMessages; count++)
             {
                 var telemetryData = ReadTelemetryData();
-
                 var dataString = JsonConvert.SerializeObject(telemetryData);
-                Message eventMessage = new Message(Encoding.UTF8.GetBytes(dataString));
-                eventMessage.ContentType = MediaTypeNames.Application.Json;
-                eventMessage.ContentEncoding = "utf-8";
+                Message eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
+                {
+                    ContentType = MediaTypeNames.Application.Json,
+                    ContentEncoding = "utf-8"
+                };
 
-                Console.WriteLine($"\t{DateTime.Now.ToLocalTime()}> Sending message: {count}, Data: [{dataString}]");
-
+                Console.WriteLine($"Sending message: {count}, Data: {dataString}");
                 await client.SendEventAsync(eventMessage);
-
-                if (count < nrOfMessages - 1)
-                    await Task.Delay(delay);
+                await Task.Delay(delay);
             }
         }
 
+        #endregion
 
-        #endregion Sending Messages
-
-        #region Receiving Messages
-
+        #region Receiving Messages (C2D)
         private async Task OnC2dMessageReceivedAsync(Message receivedMessage, object _)
         {
-            Console.WriteLine($"\t{DateTime.Now}> C2D message callback - message received with Id={receivedMessage.MessageId}.");
-            PrintMessage(receivedMessage);
-
-            await client.CompleteAsync(receivedMessage);
-            Console.WriteLine($"\t{DateTime.Now}> Completed C2D message with Id={receivedMessage.MessageId}.");
-
-            receivedMessage.Dispose();
-        }
-
-        private void PrintMessage(Message receivedMessage)
-        {
+            Console.WriteLine($"Received C2D message with Id={receivedMessage.MessageId}.");
             string messageData = Encoding.ASCII.GetString(receivedMessage.GetBytes());
-            Console.WriteLine($"\t\tReceived message: {messageData}");
-
-            int propCount = 0;
-            foreach (var prop in receivedMessage.Properties)
-            {
-                Console.WriteLine($"\t\tProperty[{propCount++}> Key={prop.Key} : Value={prop.Value}");
-            }
+            Console.WriteLine($"Message Data: {messageData}");
+            await client.CompleteAsync(receivedMessage);
         }
-
-        #endregion Receiving Messages
+        #endregion
 
         #region Direct Methods
 
-        private async Task<MethodResponse> SendMessagesHandler(MethodRequest methodRequest, object userContext)
+        private async Task<MethodResponse> EmergencyStopHandler(MethodRequest methodRequest, object userContext)
         {
-            Console.WriteLine($"\tMETHOD EXECUTED: {methodRequest.Name}");
-
-            var payload = JsonConvert.DeserializeAnonymousType(methodRequest.DataAsJson, new { nrOfMessages = default(int), delay = default(int) });
-
-            await SendMessages(payload.nrOfMessages, payload.delay);
-
-            return new MethodResponse(0);
+            Console.WriteLine("Emergency Stop triggered.");
+            opcClient.WriteNode(EmergencyStopNode, true);
+            return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Emergency Stop activated\"}"), 200);
         }
 
-        private static async Task<MethodResponse> DefaultServiceHandler(MethodRequest methodRequest, object userContext)
+        private async Task<MethodResponse> ResetErrorStatusHandler(MethodRequest methodRequest, object userContext)
         {
-            Console.WriteLine($"\tMETHOD EXECUTED: {methodRequest.Name}");
-
-            await Task.Delay(1000);
-
-            return new MethodResponse(0);
+            Console.WriteLine("Reset Error Status triggered.");
+            opcClient.WriteNode(DeviceErrorNode, 0); // Reset flag
+            return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Error Status Reset\"}"), 200);
         }
 
-        #endregion Direct Methods
+        #endregion
 
-        #region Device Twin
+        #region Device Twin Management
 
         public async Task UpdateTwinAsync()
         {
             var twin = await client.GetTwinAsync();
+            Console.WriteLine($"Initial Twin Properties: {JsonConvert.SerializeObject(twin, Formatting.Indented)}");
 
-            Console.WriteLine($"\nInitial twin value received: \n{JsonConvert.SerializeObject(twin, Formatting.Indented)}");
-            Console.WriteLine();
-
-            var reportedProperties = new TwinCollection();
-            reportedProperties["DateTimeLastAppLaunch"] = DateTime.Now;
+            var reportedProperties = new TwinCollection
+            {
+                ["ProductionRate"] = opcClient.ReadNode(ProductionRateNode).Value,
+                ["DeviceError"] = opcClient.ReadNode(DeviceErrorNode).Value
+            };
 
             await client.UpdateReportedPropertiesAsync(reportedProperties);
         }
 
         private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
         {
-            Console.WriteLine($"\tDesired property change:\n\t{JsonConvert.SerializeObject(desiredProperties)}");
-            Console.WriteLine("\tSending current time as reported property");
-            TwinCollection reportedProperties = new TwinCollection();
-            reportedProperties["DateTimeLastDesiredPropertyChangeReceived"] = DateTime.Now;
+            Console.WriteLine($"Desired property change received: {JsonConvert.SerializeObject(desiredProperties)}");
 
-            await client.UpdateReportedPropertiesAsync(reportedProperties).ConfigureAwait(false);
+            if (desiredProperties.Contains("ProductionRate"))
+            {
+                var desiredRate = (int)desiredProperties["ProductionRate"];
+                opcClient.WriteNode(ProductionRateNode, desiredRate);
+                Console.WriteLine($"ProductionRate updated to: {desiredRate}");
+
+                var reportedProperties = new TwinCollection
+                {
+                    ["ProductionRate"] = desiredRate
+                };
+
+                await client.UpdateReportedPropertiesAsync(reportedProperties);
+            }
         }
 
-        #endregion Device Twin
+        #endregion
+
+        #region Handlers Initialization
 
         public async Task InitializeHandlers()
         {
-            await client.SetReceiveMessageHandlerAsync(OnC2dMessageReceivedAsync, client);
-
-            await client.SetMethodHandlerAsync("SendMessages", SendMessagesHandler, client);
-            await client.SetMethodDefaultHandlerAsync(DefaultServiceHandler, client);
-
-            await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, client);
+            await client.SetReceiveMessageHandlerAsync(OnC2dMessageReceivedAsync, null);
+            await client.SetMethodHandlerAsync("EmergencyStop", EmergencyStopHandler, null);
+            await client.SetMethodHandlerAsync("ResetErrorStatus", ResetErrorStatusHandler, null);
+            await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
         }
+
+        #endregion
     }
 }
