@@ -8,10 +8,22 @@ using Opc.UaFx.Client;
 
 namespace DeviceSdkDemo.Device
 {
+    [Flags]
+    public enum DeviceErrors
+    {
+        None = 0,
+        EmergencyStop = 1,
+        PowerFailure = 2,
+        SensorFailure = 4,
+        Unknown = 8
+    }
     public class VirtualDevice
     {
         private readonly DeviceClient client;
-        private OpcClient opcClient;
+        private readonly OpcClient opcClient;
+
+        private int lastReportedErrorCode;
+        private int lastReportedProductionRate;
 
         public VirtualDevice(DeviceClient deviceClient, string opcServerUrl)
         {
@@ -34,7 +46,7 @@ namespace DeviceSdkDemo.Device
         #region Telemetry Data Reading
         private Dictionary<string, object> ReadTelemetryData()
         {
-            return new Dictionary<string, object>
+            var telemetryData = new Dictionary<string, object>
             {
                 ["ProductionStatus"] = opcClient.ReadNode(ProductionStatusNode).Value,
                 ["WorkorderId"] = opcClient.ReadNode(WorkorderIdNode).Value,
@@ -43,106 +55,116 @@ namespace DeviceSdkDemo.Device
                 ["BadCount"] = opcClient.ReadNode(BadCountNode).Value,
                 ["Temperature"] = opcClient.ReadNode(TemperatureNode).Value
             };
+
+            // Sprawdzenie, czy klucz "DeviceError" istnieje, jeśli nie to ustal wartość domyślną
+            var deviceErrorValue = opcClient.ReadNode(DeviceErrorNode).Value ?? 0;
+            telemetryData["DeviceError"] = deviceErrorValue;
+
+            return telemetryData;
         }
+
+        public async Task ReadTelemetryAndSendToHubAsync()
+        {
+            var telemetryData = ReadTelemetryData();
+
+            // Aktualizacja zmiennych lastReported
+            lastReportedProductionRate = (int)telemetryData["ProductionRate"];
+            lastReportedErrorCode = (int)telemetryData["DeviceError"];
+
+            var dataString = JsonConvert.SerializeObject(telemetryData);
+            Message eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
+            {
+                ContentType = MediaTypeNames.Application.Json,
+                ContentEncoding = "utf-8"
+            };
+
+            Console.WriteLine($"Sending telemetry: {dataString}");
+            await client.SendEventAsync(eventMessage);
+
+            // Aktualizacja Twin w IoT Hub po wysłaniu telemetrycznych danych
+            await UpdateTwinAsync();
+        }
+
         #endregion
 
-        #region Sending Messages
-
-        public async Task SendMessages(int nrOfMessages, int delay)
+        #region Device Twin Management
+        public async Task InitializeHandlers()
         {
-            for (int count = 0; count < nrOfMessages; count++)
+            await client.SetReceiveMessageHandlerAsync((message, userContext) =>
             {
-                var telemetryData = ReadTelemetryData();
-                var dataString = JsonConvert.SerializeObject(telemetryData);
-                Message eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
-                {
-                    ContentType = MediaTypeNames.Application.Json,
-                    ContentEncoding = "utf-8"
-                };
+                Console.WriteLine("C2D message received.");
+                return Task.FromResult(MessageResponse.Completed);
+            }, null);
 
-                Console.WriteLine($"Sending message: {count}, Data: {dataString}");
-                await client.SendEventAsync(eventMessage);
-                await Task.Delay(delay);
+
+            await client.SetMethodHandlerAsync("EmergencyStop", EmergencyStopHandler, null);
+            await client.SetMethodHandlerAsync("ResetErrorStatus", ResetErrorStatusHandler, null);
+            await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
+            await InitializeTwinOnStartAsync();
+        }
+
+        public async Task UpdateTwinAsync()
+        {
+            var reportedProperties = new TwinCollection
+            {
+                ["DeviceError"] = lastReportedErrorCode,
+                ["ProductionRate"] = lastReportedProductionRate
+            };
+
+            try
+            {
+                await client.UpdateReportedPropertiesAsync(reportedProperties);
+                Console.WriteLine("Device Twin reported properties updated successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error updating Device Twin: {ex.Message}");
             }
         }
 
-        #endregion
-
-        #region Receiving Messages (C2D)
-        private async Task OnC2dMessageReceivedAsync(Message receivedMessage, object _)
+        private async Task InitializeTwinOnStartAsync()
         {
-            Console.WriteLine($"Received C2D message with Id={receivedMessage.MessageId}.");
-            string messageData = Encoding.ASCII.GetString(receivedMessage.GetBytes());
-            Console.WriteLine($"Message Data: {messageData}");
-            await client.CompleteAsync(receivedMessage);
+            int desiredInitialRate = await ReadDesiredRateIfExistsAsync();
+            opcClient.WriteNode(ProductionRateNode, desiredInitialRate);
+            var initialReportedProperties = new TwinCollection
+            {
+                ["DeviceError"] = 0,
+                ["ProductionRate"] = desiredInitialRate
+            };
+            await client.UpdateReportedPropertiesAsync(initialReportedProperties);
+        }
+
+        private async Task<int> ReadDesiredRateIfExistsAsync()
+        {
+            var desired = await client.GetTwinAsync();
+            return desired.Properties.Desired.Contains("ProductionRate")
+                ? (int)desired.Properties.Desired["ProductionRate"]
+                : 0;
+        }
+
+        private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
+        {
+            if (desiredProperties.Contains("ProductionRate"))
+            {
+                int rate = (int)desiredProperties["ProductionRate"];
+                opcClient.WriteNode(ProductionRateNode, rate);
+                await client.UpdateReportedPropertiesAsync(new TwinCollection { ["ProductionRate"] = rate });
+            }
         }
         #endregion
 
         #region Direct Methods
-
         private async Task<MethodResponse> EmergencyStopHandler(MethodRequest methodRequest, object userContext)
         {
-            Console.WriteLine("Emergency Stop triggered.");
             opcClient.WriteNode(EmergencyStopNode, true);
             return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Emergency Stop activated\"}"), 200);
         }
 
         private async Task<MethodResponse> ResetErrorStatusHandler(MethodRequest methodRequest, object userContext)
         {
-            Console.WriteLine("Reset Error Status triggered.");
-            opcClient.WriteNode(DeviceErrorNode, 0); // Reset flag
+            opcClient.WriteNode(DeviceErrorNode, 0);
             return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Error Status Reset\"}"), 200);
         }
-
-        #endregion
-
-        #region Device Twin Management
-
-        public async Task UpdateTwinAsync()
-        {
-            var twin = await client.GetTwinAsync();
-            Console.WriteLine($"Initial Twin Properties: {JsonConvert.SerializeObject(twin, Formatting.Indented)}");
-
-            var reportedProperties = new TwinCollection
-            {
-                ["ProductionRate"] = opcClient.ReadNode(ProductionRateNode).Value,
-                ["DeviceError"] = opcClient.ReadNode(DeviceErrorNode).Value
-            };
-
-            await client.UpdateReportedPropertiesAsync(reportedProperties);
-        }
-
-        private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
-        {
-            Console.WriteLine($"Desired property change received: {JsonConvert.SerializeObject(desiredProperties)}");
-
-            if (desiredProperties.Contains("ProductionRate"))
-            {
-                var desiredRate = (int)desiredProperties["ProductionRate"];
-                opcClient.WriteNode(ProductionRateNode, desiredRate);
-                Console.WriteLine($"ProductionRate updated to: {desiredRate}");
-
-                var reportedProperties = new TwinCollection
-                {
-                    ["ProductionRate"] = desiredRate
-                };
-
-                await client.UpdateReportedPropertiesAsync(reportedProperties);
-            }
-        }
-
-        #endregion
-
-        #region Handlers Initialization
-
-        public async Task InitializeHandlers()
-        {
-            await client.SetReceiveMessageHandlerAsync(OnC2dMessageReceivedAsync, null);
-            await client.SetMethodHandlerAsync("EmergencyStop", EmergencyStopHandler, null);
-            await client.SetMethodHandlerAsync("ResetErrorStatus", ResetErrorStatusHandler, null);
-            await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
-        }
-
         #endregion
     }
 }
