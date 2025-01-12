@@ -26,11 +26,14 @@ namespace DeviceSdkDemo.Device
         private DeviceErrors lastReportedErrorCode;
         private int lastReportedProductionRate;
 
+        private DeviceErrors lastCheckedErrorCode;
+
         public VirtualDevice(DeviceClient deviceClient, string opcServerUrl)
         {
             this.client = deviceClient;
             this.opcClient = new OpcClient(opcServerUrl);
             this.opcClient.Connect();
+            this.lastCheckedErrorCode = DeviceErrors.None; 
         }
 
         #region OPC UA Node Mapping
@@ -60,6 +63,11 @@ namespace DeviceSdkDemo.Device
             var deviceErrorValue = opcClient.ReadNode(DeviceErrorNode).Value ?? 0;
             telemetryData["DeviceError"] = ((DeviceErrors)Convert.ToInt32(deviceErrorValue)).ToString();
 
+            if ((int)telemetryData["ProductionStatus"] == 0)
+            {
+                telemetryData["WorkorderId"] = string.Empty;
+            }
+
             return telemetryData;
         }
 
@@ -70,8 +78,20 @@ namespace DeviceSdkDemo.Device
             lastReportedProductionRate = (int)telemetryData["ProductionRate"];
             lastReportedErrorCode = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
 
+            await SendTelemetryDataAsync(telemetryData);
+
+            if (lastReportedErrorCode != DeviceErrors.None)
+            {
+                await SendDeviceErrorEventAsync(lastReportedErrorCode);
+            }
+
+            await UpdateTwinAsync();
+        }
+
+        private async Task SendTelemetryDataAsync(Dictionary<string, object> telemetryData)
+        {
             var dataString = JsonConvert.SerializeObject(telemetryData);
-            Message eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
+            var eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
             {
                 ContentType = MediaTypeNames.Application.Json,
                 ContentEncoding = "utf-8"
@@ -79,9 +99,40 @@ namespace DeviceSdkDemo.Device
 
             Console.WriteLine($"Sending telemetry: {dataString}");
             await client.SendEventAsync(eventMessage);
-
-            await UpdateTwinAsync();
         }
+
+        private async Task SendDeviceErrorEventAsync(DeviceErrors error)
+        {
+            var errorEvent = new { DeviceError = error.ToString() };
+            var dataString = JsonConvert.SerializeObject(errorEvent);
+            var errorMessage = new Message(Encoding.UTF8.GetBytes(dataString))
+            {
+                ContentType = MediaTypeNames.Application.Json,
+                ContentEncoding = "utf-8"
+            };
+
+            Console.WriteLine($"Sending error event: {dataString}");
+            await client.SendEventAsync(errorMessage);
+        }
+
+        private async Task MonitorDeviceErrorsAsync()
+        {
+            while (true) 
+            {
+                var deviceErrorValue = opcClient.ReadNode(DeviceErrorNode).Value ?? 0;
+                var currentErrorCode = (DeviceErrors)Convert.ToInt32(deviceErrorValue);
+
+                if (currentErrorCode != lastCheckedErrorCode)
+                {
+                  
+                    await SendDeviceErrorEventAsync(currentErrorCode);
+                    lastCheckedErrorCode = currentErrorCode; 
+                }
+
+                await Task.Delay(1000); 
+            }
+        }
+
 
         #endregion
 
@@ -96,85 +147,11 @@ namespace DeviceSdkDemo.Device
 
             await client.SetMethodHandlerAsync("EmergencyStop", DeviceErrorHandler, client);
             await client.SetMethodHandlerAsync("ResetErrorStatus", DeviceErrorHandler, client);
-
-    
             await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
-            await InitializeTwinOnStartAsync();
+            //await InitializeTwinOnStartAsync();
+
+            _ = MonitorDeviceErrorsAsync();
         }
-
-
-        private void UpdateLocalState()
-        {
-            var telemetryData = ReadTelemetryData();
-            lastReportedProductionRate = (int)telemetryData["ProductionRate"];
-            lastReportedErrorCode = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
-            Console.WriteLine($"Local state updated: ProductionRate={lastReportedProductionRate}, DeviceError={lastReportedErrorCode}");
-        }
-
-        public async Task UpdateTwinAsync()
-        {
-            UpdateLocalState(); 
-
-            var reportedProperties = new TwinCollection
-            {
-                ["DeviceError"] = lastReportedErrorCode.ToString(),
-                ["ProductionRate"] = lastReportedProductionRate
-            };
-
-            try
-            {
-                await client.UpdateReportedPropertiesAsync(reportedProperties);
-                Console.WriteLine("Device Twin reported properties updated successfully.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error updating Device Twin: {ex.Message}");
-            }
-        }
-
-
-        private async Task InitializeTwinOnStartAsync()
-        {
-            int desiredInitialRate = await ReadDesiredRateIfExistsAsync();
-            opcClient.WriteNode(ProductionRateNode, desiredInitialRate);
-            var initialReportedProperties = new TwinCollection
-            {
-                ["DeviceError"] = DeviceErrors.None.ToString(),
-                ["ProductionRate"] = desiredInitialRate
-            };
-            await client.UpdateReportedPropertiesAsync(initialReportedProperties);
-        }
-
-        private async Task<int> ReadDesiredRateIfExistsAsync()
-        {
-            var desired = await client.GetTwinAsync();
-            return desired.Properties.Desired.Contains("ProductionRate")
-                ? (int)desired.Properties.Desired["ProductionRate"]
-                : 0;
-        }
-        public async Task<int> GetReportedDeviceStatusAsync()
-        {
-            var twin = await client.GetTwinAsync();
-            var reportedProperties = twin.Properties.Reported;
-
-            if (reportedProperties.Contains("DeviceError"))
-            {
-                var errorArray = reportedProperties["DeviceError"] as JArray;
-                var errorList = errorArray?.ToObject<List<string>>() ?? new List<string>();
-
-                int errorStatusNumber = 0;
-                foreach (var error in errorList)
-                {
-                    if (Enum.TryParse<DeviceErrors>(error, true, out var parsedError))
-                    {
-                        errorStatusNumber |= (int)parsedError;
-                    }
-                }
-                return errorStatusNumber;
-            }
-            return 0;
-        }
-
         private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
         {
             Console.WriteLine("Desired properties update received.");
@@ -210,9 +187,54 @@ namespace DeviceSdkDemo.Device
                 }
             }
         }
+        private async Task<int> ReadDesiredRateIfExistsAsync()
+        {
+            var twin = await client.GetTwinAsync();
+            if (twin.Properties.Desired.Contains("ProductionRate"))
+            {
+                return (int)twin.Properties.Desired["ProductionRate"];
+            }
+            return 0; // Domyślna wartość, jeśli nie ma ustawionej wartości w twinie
+        }
 
+        private async Task InitializeTwinOnStartAsync()
+        {
+            int desiredInitialRate = await ReadDesiredRateIfExistsAsync();
+            opcClient.WriteNode(ProductionRateNode, desiredInitialRate);
+            var initialReportedProperties = new TwinCollection
+            {
+                ["DeviceError"] = DeviceErrors.None.ToString(),
+                ["ProductionRate"] = desiredInitialRate
+            };
+            await client.UpdateReportedPropertiesAsync(initialReportedProperties);
+        }
+        private void UpdateLocalState()
+        {
+            var telemetryData = ReadTelemetryData();
+            lastReportedProductionRate = (int)telemetryData["ProductionRate"];
+            lastReportedErrorCode = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
+            Console.WriteLine($"Local state updated: ProductionRate={lastReportedProductionRate}, DeviceError={lastReportedErrorCode}");
+        }
+        public async Task UpdateTwinAsync()
+        {
+            UpdateLocalState();
 
+            var reportedProperties = new TwinCollection
+            {
+                ["DeviceError"] = lastReportedErrorCode.ToString(),
+                ["ProductionRate"] = lastReportedProductionRate
+            };
 
+            try
+            {
+                await client.UpdateReportedPropertiesAsync(reportedProperties);
+                Console.WriteLine("Device Twin reported properties updated successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error updating Device Twin: {ex.Message}");
+            }
+        }
         #endregion
 
         #region Direct Methods
@@ -220,8 +242,7 @@ namespace DeviceSdkDemo.Device
         {
             Console.WriteLine($"Direct Method invoked: {methodRequest.Name}");
 
-            
-            var result = opcClient.CallMethod($"ns=2;s=Device 1", $"ns=2;s=Device 1/{methodRequest.Name}");
+            var result = opcClient.CallMethod("ns=2;s=Device 1", $"ns=2;s=Device 1/{methodRequest.Name}");
 
             if (result != null)
             {
@@ -232,13 +253,10 @@ namespace DeviceSdkDemo.Device
                 Console.WriteLine($"Failed to execute {methodRequest.Name}.");
             }
 
-   
             var responsePayload = new { message = $"{methodRequest.Name} executed successfully" };
             string responseJson = JsonConvert.SerializeObject(responsePayload);
             return new MethodResponse(Encoding.UTF8.GetBytes(responseJson), 200);
         }
-
-
         #endregion
     }
 }
