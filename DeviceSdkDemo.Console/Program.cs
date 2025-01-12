@@ -1,13 +1,13 @@
 ﻿using DeviceSdkDemo.Device;
 using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices;
-using TransportType = Microsoft.Azure.Devices.TransportType;
+using Opc.UaFx.Client;
 
 string deviceConnectionString = ConnectionStrings.deviceConnectionString;
 string opcServerUrl = ConnectionStrings.OpcUaServerUrl;
 
 // Utworzenie klienta IoT Hub
-using var deviceClient = DeviceClient.CreateFromConnectionString(deviceConnectionString, (Microsoft.Azure.Devices.Client.TransportType)TransportType.Amqp);
+using var deviceClient = DeviceClient.CreateFromConnectionString(deviceConnectionString, Microsoft.Azure.Devices.Client.TransportType.Mqtt);
 var device = new VirtualDevice(deviceClient, opcServerUrl);
 
 // Inicjalizacja handlerów

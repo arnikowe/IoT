@@ -5,6 +5,7 @@ using System.Net.Mime;
 using System.Text;
 using Opc.UaFx;
 using Opc.UaFx.Client;
+using Newtonsoft.Json.Linq;
 
 namespace DeviceSdkDemo.Device
 {
@@ -93,10 +94,10 @@ namespace DeviceSdkDemo.Device
                 return Task.FromResult(MessageResponse.Completed);
             }, null);
 
-            await client.SetMethodHandlerAsync("EmergencyStop", EmergencyStopHandler, null);
-            await client.SetMethodHandlerAsync("ResetErrorStatus", ResetErrorStatusHandler, null);
+            await client.SetMethodHandlerAsync("EmergencyStop", DeviceErrorHandler, client);
+            await client.SetMethodHandlerAsync("ResetErrorStatus", DeviceErrorHandler, client);
 
-            // Poprawne nasłuchiwanie na zmiany w Device Twin
+    
             await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
             await InitializeTwinOnStartAsync();
         }
@@ -112,7 +113,7 @@ namespace DeviceSdkDemo.Device
 
         public async Task UpdateTwinAsync()
         {
-            UpdateLocalState(); // Upewnienie się, że stan jest aktualny przed aktualizacją Device Twin
+            UpdateLocalState(); 
 
             var reportedProperties = new TwinCollection
             {
@@ -151,92 +152,93 @@ namespace DeviceSdkDemo.Device
                 ? (int)desired.Properties.Desired["ProductionRate"]
                 : 0;
         }
+        public async Task<int> GetReportedDeviceStatusAsync()
+        {
+            var twin = await client.GetTwinAsync();
+            var reportedProperties = twin.Properties.Reported;
+
+            if (reportedProperties.Contains("DeviceError"))
+            {
+                var errorArray = reportedProperties["DeviceError"] as JArray;
+                var errorList = errorArray?.ToObject<List<string>>() ?? new List<string>();
+
+                int errorStatusNumber = 0;
+                foreach (var error in errorList)
+                {
+                    if (Enum.TryParse<DeviceErrors>(error, true, out var parsedError))
+                    {
+                        errorStatusNumber |= (int)parsedError;
+                    }
+                }
+                return errorStatusNumber;
+            }
+            return 0;
+        }
 
         private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
-{
-    Console.WriteLine("Desired properties update received.");
-
-    bool twinUpdated = false;
-
-    if (desiredProperties.Contains("ProductionRate"))
-    {
-        int rate = (int)desiredProperties["ProductionRate"];
-        opcClient.WriteNode(ProductionRateNode, rate);
-        lastReportedProductionRate = rate;
-        Console.WriteLine($"ProductionRate updated to: {rate}");
-        twinUpdated = true;
-    }
-
-    if (desiredProperties.Contains("DeviceError"))
-    {
-        try
         {
-            // Obsługa wartości binarnych dla DeviceErrors
-            string errorString = desiredProperties["DeviceError"].ToString();
-            var errors = errorString.Split(',')
-                .Select(e => (DeviceErrors)Enum.Parse(typeof(DeviceErrors), e.Trim()))
-                .Aggregate(DeviceErrors.None, (current, next) => current | next);
+            Console.WriteLine("Desired properties update received.");
 
-            int binaryErrorValue = (int)errors;  // Konwersja na wartość binarną
-            lastReportedErrorCode = errors;
-            opcClient.WriteNode(DeviceErrorNode, binaryErrorValue);  // Zapisanie jako wartość binarna
-            Console.WriteLine($"DeviceError updated to binary value: {binaryErrorValue}");
-            twinUpdated = true;
+            bool twinUpdated = false;
 
-            // Wyślij komunikat D2C po zmianie błędu
-            var errorMessage = new Message(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new
+            if (desiredProperties.Contains("ProductionRate"))
             {
-                DeviceError = binaryErrorValue
-            })))
+                int rate = (int)desiredProperties["ProductionRate"];
+                opcClient.WriteNode(ProductionRateNode, rate);
+                lastReportedProductionRate = rate;
+                Console.WriteLine($"ProductionRate updated to: {rate}");
+                twinUpdated = true;
+            }
+
+
+            if (twinUpdated)
             {
-                ContentType = MediaTypeNames.Application.Json,
-                ContentEncoding = "utf-8"
-            };
-            await client.SendEventAsync(errorMessage);
-            Console.WriteLine("Sent D2C message for DeviceError change.");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error parsing DeviceError: {ex.Message}");
-        }
-    }
+                var reportedProperties = new TwinCollection
+                {
+                    ["DeviceError"] = (int)lastReportedErrorCode,
+                    ["ProductionRate"] = lastReportedProductionRate
+                };
 
-    if (twinUpdated)
-    {
-        var reportedProperties = new TwinCollection
-        {
-            ["DeviceError"] = (int)lastReportedErrorCode,
-            ["ProductionRate"] = lastReportedProductionRate
-        };
-
-        try
-        {
-            await client.UpdateReportedPropertiesAsync(reportedProperties);
-            Console.WriteLine("Device Twin reported properties updated successfully.");
+                try
+                {
+                    await client.UpdateReportedPropertiesAsync(reportedProperties);
+                    Console.WriteLine("Device Twin reported properties updated successfully.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error updating Device Twin: {ex.Message}");
+                }
+            }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error updating Device Twin: {ex.Message}");
-        }
-    }
-}
 
 
 
         #endregion
 
         #region Direct Methods
-        private async Task<MethodResponse> EmergencyStopHandler(MethodRequest methodRequest, object userContext)
+        private async Task<MethodResponse> DeviceErrorHandler(MethodRequest methodRequest, object userContext)
         {
-            opcClient.WriteNode(EmergencyStopNode, true);
-            return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Emergency Stop activated\"}"), 200);
+            Console.WriteLine($"Direct Method invoked: {methodRequest.Name}");
+
+            
+            var result = opcClient.CallMethod($"ns=2;s=Device 1", $"ns=2;s=Device 1/{methodRequest.Name}");
+
+            if (result != null)
+            {
+                Console.WriteLine($"{methodRequest.Name} executed successfully.");
+            }
+            else
+            {
+                Console.WriteLine($"Failed to execute {methodRequest.Name}.");
+            }
+
+   
+            var responsePayload = new { message = $"{methodRequest.Name} executed successfully" };
+            string responseJson = JsonConvert.SerializeObject(responsePayload);
+            return new MethodResponse(Encoding.UTF8.GetBytes(responseJson), 200);
         }
 
-        private async Task<MethodResponse> ResetErrorStatusHandler(MethodRequest methodRequest, object userContext)
-        {
-            opcClient.WriteNode(DeviceErrorNode, 0);
-            return new MethodResponse(Encoding.UTF8.GetBytes("{\"status\":\"Error Status Reset\"}"), 200);
-        }
+
         #endregion
     }
 }
