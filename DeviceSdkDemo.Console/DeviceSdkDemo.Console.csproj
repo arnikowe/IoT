@@ -10,6 +10,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Azure.Devices" Version="1.40.0" />
     <PackageReference Include="Microsoft.Azure.Devices.Client" Version="1.42.3" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="9.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.1" />
     <PackageReference Include="Opc.UaFx.Client" Version="2.42.5" />
   </ItemGroup>
 

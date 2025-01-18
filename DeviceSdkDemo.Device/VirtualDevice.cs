@@ -6,6 +6,7 @@ using System.Text;
 using Opc.UaFx;
 using Opc.UaFx.Client;
 using Newtonsoft.Json.Linq;
+using System.Net.Sockets;
 
 namespace DeviceSdkDemo.Device
 {
@@ -27,49 +28,56 @@ namespace DeviceSdkDemo.Device
         private int lastReportedProductionRate;
 
         private DeviceErrors lastCheckedErrorCode;
+        private readonly string deviceNodePrefix;
 
-        public VirtualDevice(DeviceClient deviceClient, string opcServerUrl)
+        public VirtualDevice(DeviceClient deviceClient, string opcServerUrl, string deviceNodePrefix)
         {
-            this.client = deviceClient;
-            this.opcClient = new OpcClient(opcServerUrl);
-            this.opcClient.Connect();
-            this.lastCheckedErrorCode = DeviceErrors.None; 
+            client = deviceClient;
+            opcClient = new OpcClient(opcServerUrl);
+            opcClient.Connect();
+            this.deviceNodePrefix = deviceNodePrefix;
         }
 
-        #region OPC UA Node Mapping
-        private const string ProductionStatusNode = "ns=2;s=Device 1/ProductionStatus";
-        private const string WorkorderIdNode = "ns=2;s=Device 1/WorkorderId";
-        private const string ProductionRateNode = "ns=2;s=Device 1/ProductionRate";
-        private const string GoodCountNode = "ns=2;s=Device 1/GoodCount";
-        private const string BadCountNode = "ns=2;s=Device 1/BadCount";
-        private const string TemperatureNode = "ns=2;s=Device 1/Temperature";
-        private const string DeviceErrorNode = "ns=2;s=Device 1/DeviceError";
-        private const string EmergencyStopNode = "ns=2;s=Device 1/EmergencyStop";
-        #endregion
+
 
         #region Telemetry Data Reading
         private Dictionary<string, object> ReadTelemetryData()
         {
-            var telemetryData = new Dictionary<string, object>
-            {
-                ["ProductionStatus"] = opcClient.ReadNode(ProductionStatusNode).Value,
-                ["WorkorderId"] = opcClient.ReadNode(WorkorderIdNode).Value,
-                ["ProductionRate"] = opcClient.ReadNode(ProductionRateNode).Value,
-                ["GoodCount"] = opcClient.ReadNode(GoodCountNode).Value,
-                ["BadCount"] = opcClient.ReadNode(BadCountNode).Value,
-                ["Temperature"] = opcClient.ReadNode(TemperatureNode).Value
-            };
+            var telemetryData = new Dictionary<string, object>();
 
-            var deviceErrorValue = opcClient.ReadNode(DeviceErrorNode).Value ?? 0;
-            telemetryData["DeviceError"] = ((DeviceErrors)Convert.ToInt32(deviceErrorValue)).ToString();
-
-            if ((int)telemetryData["ProductionStatus"] == 0)
+            try
             {
+                telemetryData["ProductionStatus"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionStatus")?.Value ?? 0;
+                telemetryData["WorkorderId"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/WorkorderId")?.Value ?? string.Empty;
+                telemetryData["ProductionRate"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionRate")?.Value ?? 0;
+                telemetryData["GoodCount"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/GoodCount")?.Value ?? 0;
+                telemetryData["BadCount"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/BadCount")?.Value ?? 0;
+                telemetryData["Temperature"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/Temperature")?.Value ?? 0.0;
+
+                var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError")?.Value ?? 0;
+                telemetryData["DeviceError"] = ((DeviceErrors)Convert.ToInt32(deviceErrorValue)).ToString();
+
+                if ((int)telemetryData["ProductionStatus"] == 0)
+                {
+                    telemetryData["WorkorderId"] = string.Empty;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading telemetry data: {ex.Message}");
+                // Assign default values in case of failure
+                telemetryData["ProductionStatus"] = 0;
                 telemetryData["WorkorderId"] = string.Empty;
+                telemetryData["ProductionRate"] = 0;
+                telemetryData["GoodCount"] = 0;
+                telemetryData["BadCount"] = 0;
+                telemetryData["Temperature"] = 0.0;
+                telemetryData["DeviceError"] = DeviceErrors.Unknown.ToString();
             }
 
             return telemetryData;
         }
+
 
         public async Task ReadTelemetryAndSendToHubAsync()
         {
@@ -91,15 +99,26 @@ namespace DeviceSdkDemo.Device
         private async Task SendTelemetryDataAsync(Dictionary<string, object> telemetryData)
         {
             var dataString = JsonConvert.SerializeObject(telemetryData);
+
+            Console.WriteLine($"Telemetry JSON: {dataString}");
             var eventMessage = new Message(Encoding.UTF8.GetBytes(dataString))
             {
                 ContentType = MediaTypeNames.Application.Json,
                 ContentEncoding = "utf-8"
             };
 
-            Console.WriteLine($"Sending telemetry: {dataString}");
-            await client.SendEventAsync(eventMessage);
+            try
+            {
+                Console.WriteLine("Sending telemetry...");
+                await client.SendEventAsync(eventMessage);
+                Console.WriteLine("Telemetry sent successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending telemetry: {ex.Message}");
+            }
         }
+
 
         private async Task SendDeviceErrorEventAsync(DeviceErrors error)
         {
@@ -117,19 +136,19 @@ namespace DeviceSdkDemo.Device
 
         private async Task MonitorDeviceErrorsAsync()
         {
-            while (true) 
+            while (true)
             {
-                var deviceErrorValue = opcClient.ReadNode(DeviceErrorNode).Value ?? 0;
+                var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError").Value ?? 0;
                 var currentErrorCode = (DeviceErrors)Convert.ToInt32(deviceErrorValue);
 
                 if (currentErrorCode != lastCheckedErrorCode)
                 {
-                  
+
                     await SendDeviceErrorEventAsync(currentErrorCode);
-                    lastCheckedErrorCode = currentErrorCode; 
+                    lastCheckedErrorCode = currentErrorCode;
                 }
 
-                await Task.Delay(1000); 
+                await Task.Delay(1000);
             }
         }
 
@@ -161,7 +180,7 @@ namespace DeviceSdkDemo.Device
             if (desiredProperties.Contains("ProductionRate"))
             {
                 int rate = (int)desiredProperties["ProductionRate"];
-                opcClient.WriteNode(ProductionRateNode, rate);
+                opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/ProductionRate", rate);
                 lastReportedProductionRate = rate;
                 Console.WriteLine($"ProductionRate updated to: {rate}");
                 twinUpdated = true;
@@ -200,7 +219,7 @@ namespace DeviceSdkDemo.Device
         private async Task InitializeTwinOnStartAsync()
         {
             int desiredInitialRate = await ReadDesiredRateIfExistsAsync();
-            opcClient.WriteNode(ProductionRateNode, desiredInitialRate);
+            opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/ProductionRate", desiredInitialRate);
             var initialReportedProperties = new TwinCollection
             {
                 ["DeviceError"] = DeviceErrors.None.ToString(),
@@ -242,7 +261,7 @@ namespace DeviceSdkDemo.Device
         {
             Console.WriteLine($"Direct Method invoked: {methodRequest.Name}");
 
-            var result = opcClient.CallMethod("ns=2;s=Device 1", $"ns=2;s=Device 1/{methodRequest.Name}");
+            var result = opcClient.CallMethod($"ns=2;s={deviceNodePrefix}", $"ns=2;s={deviceNodePrefix}/{methodRequest.Name}");
 
             if (result != null)
             {

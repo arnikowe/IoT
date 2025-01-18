@@ -1,0 +1,10 @@
+{
+  "IoTHubConnectionString": "HostName=WMII.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=YQKpP5uxHXb5gmxE6glEr+QSyfu3CwHQgAIoTDz4fVc=",
+  "OpcUaServerUrl": "opc.tcp://localhost:4840/",
+  "serviceBusConnectionString" : "Endpoint=sb://servicebusiot.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=ZWZZJGbQDFmtQTQ3nA2j/+Z6XZv2gSZlt+ASbNae+Vg=",
+  "DeviceConnectionStrings": {
+    "Device1": "HostName=IoTWMIII.azure-devices.net;DeviceId=Device1;SharedAccessKey=ETdeZ66qyjrafq2rUbzyj21eCy/eHb7gNgq6mWnZg9w=",
+    "Device2": "HostName=IoTWMIII.azure-devices.net;DeviceId=Device2;SharedAccessKey=dHnHnMnXjh3msCBRnXASCWByUYi4DBIpARYJtXUvdx4=",
+    "Device3": "HostName=IoTWMIII.azure-devices.net;DeviceId=Device3;SharedAccessKey=RcUXwqQMsUgB6jtExzaPYjox8Xmi7PDJRQjIxIUiM2s="
+  }
+}

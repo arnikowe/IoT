@@ -1,59 +1,52 @@
 ﻿using DeviceSdkDemo.Device;
-using Microsoft.Azure.Devices.Client;
-using Microsoft.Azure.Devices;
-using Opc.UaFx.Client;
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 
-string deviceConnectionString = ConnectionStrings.deviceConnectionString;
-string opcServerUrl = ConnectionStrings.OpcUaServerUrl;
-
-// Utworzenie klienta IoT Hub
-using var deviceClient = DeviceClient.CreateFromConnectionString(deviceConnectionString, Microsoft.Azure.Devices.Client.TransportType.Mqtt);
-var device = new VirtualDevice(deviceClient, opcServerUrl);
-
-// Inicjalizacja handlerów
-await device.InitializeHandlers();
-Console.WriteLine("Handlers initialized.");
-
-// Uruchomienie nasłuchiwania w tle
-_ = Task.Run(async () =>
+public static class Program
 {
-    while (true)
+    public static async Task Main(string[] args)
     {
-        await Task.Delay(1000); // Regularne opóźnienie, aby uniknąć zbyt częstego odpytywania
-    }
-});
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("ConnectionStrings.json", optional: false, reloadOnChange: true)
+            .Build();
 
-while (true)
-{
-    Console.WriteLine("\nWybierz opcję:");
-    Console.WriteLine("1. Wyślij dane telemetryczne");
-    Console.WriteLine("2. Wykonaj metodę EmergencyStop");
-    Console.WriteLine("3. Zaktualizuj Device Twin");
-    Console.WriteLine("0. Wyjdź");
+        var iotHubConnectionString = configuration["IoTHubConnectionString"];
+        var opcUaServerUrl = configuration["OpcUaServerUrl"];
+        var serviceBusConnectionString = configuration["serviceBusConnectionString"];
 
-    var choice = Console.ReadLine();
+        var deviceConfigurations = new[]
+        {
+            (
+                configuration["DeviceConnectionStrings:Device1"],
+                opcUaServerUrl,
+                "Device 1"
+            ),
+            (
+                configuration["DeviceConnectionStrings:Device2"],
+                opcUaServerUrl,
+                "Device 2"
+            ),
+            (
+                configuration["DeviceConnectionStrings:Device3"],
+                opcUaServerUrl,
+                "Device 3"
+            )
+        };
 
-    switch (choice)
-    {
-        case "1":
-            await device.ReadTelemetryAndSendToHubAsync();
-            Console.WriteLine("Telemetry sent.");
-            break;
-        case "2":
-            var method = new CloudToDeviceMethod("EmergencyStop");
-            var serviceClient = ServiceClient.CreateFromConnectionString(ConnectionStrings.IoTHubConnectionString);
-            var methodResponse = await serviceClient.InvokeDeviceMethodAsync("DeviceDemoSdk", method);
-            Console.WriteLine($"EmergencyStop response: {methodResponse.Status}");
-            break;
-        case "3":
-            await device.UpdateTwinAsync();
-            Console.WriteLine("Device Twin updated.");
-            break;
-        case "0":
-            Console.WriteLine("Exiting program.");
-            return;
-        default:
-            Console.WriteLine("Nieprawidłowy wybór, spróbuj ponownie.");
-            break;
+
+        var deviceManager = new DeviceManager(deviceConfigurations, serviceBusConnectionString, iotHubConnectionString);
+        var cancellationTokenSource = new CancellationTokenSource();
+
+        Console.CancelKeyPress += (s, e) =>
+        {
+            e.Cancel = true;
+            cancellationTokenSource.Cancel();
+        };
+
+        await deviceManager.RunAsync(cancellationTokenSource.Token);
     }
 }
