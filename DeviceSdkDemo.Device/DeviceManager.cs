@@ -13,10 +13,10 @@ namespace DeviceSdkDemo.Device
         private readonly ServiceBusHandler _serviceBusHandler;
 
         public DeviceManager(IEnumerable<(string connectionString, string opcServerUrl, string deviceNodePrefix)> deviceConfigurations,
-                             string serviceBusConnectionString, string iotHubConnectionString)
+                             string serviceBusConnectionString, string iotHubConnectionString,string emailConnectionString, string senderEmail,string recipientEmail)
         {
             _devices = new List<VirtualDevice>();
-            _serviceBusHandler = new ServiceBusHandler(serviceBusConnectionString, iotHubConnectionString);
+            _serviceBusHandler = new ServiceBusHandler(serviceBusConnectionString, iotHubConnectionString,emailConnectionString, senderEmail, recipientEmail);
 
             foreach (var config in deviceConfigurations)
             {
@@ -27,6 +27,8 @@ namespace DeviceSdkDemo.Device
 
         public async Task RunAsync(CancellationToken cancellationToken)
         {
+
+
             // Start processing Service Bus messages
             await _serviceBusHandler.StartProcessingAsync();
 
@@ -45,6 +47,7 @@ namespace DeviceSdkDemo.Device
 
         private async Task HandleDeviceAsync(VirtualDevice device, CancellationToken cancellationToken)
         {
+
             await device.InitializeHandlers();
             Console.WriteLine($"Handlers initialized for device {device}.");
 
@@ -53,7 +56,7 @@ namespace DeviceSdkDemo.Device
                 try
                 {
                     await device.ReadTelemetryAndSendToHubAsync();
-                    await Task.Delay(1000, cancellationToken);
+                    await Task.Delay(10000, cancellationToken);
                 }
                 catch (Exception ex)
                 {

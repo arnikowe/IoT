@@ -17,6 +17,10 @@ public static class Program
         var iotHubConnectionString = configuration["IoTHubConnectionString"];
         var opcUaServerUrl = configuration["OpcUaServerUrl"];
         var serviceBusConnectionString = configuration["serviceBusConnectionString"];
+        var emailConnectionString = configuration["Email:ConnectionString"];
+        var senderEmail = configuration["Email:SenderEmail"];
+        var recipientEmail = configuration["Email:RecipientEmail"];
+
 
         var deviceConfigurations = new[]
         {
@@ -38,7 +42,7 @@ public static class Program
         };
 
 
-        var deviceManager = new DeviceManager(deviceConfigurations, serviceBusConnectionString, iotHubConnectionString);
+        var deviceManager = new DeviceManager(deviceConfigurations, serviceBusConnectionString, iotHubConnectionString,emailConnectionString,senderEmail,recipientEmail);
         var cancellationTokenSource = new CancellationTokenSource();
 
         Console.CancelKeyPress += (s, e) =>

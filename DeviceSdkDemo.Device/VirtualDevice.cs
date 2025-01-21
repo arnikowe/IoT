@@ -30,6 +30,8 @@ namespace DeviceSdkDemo.Device
         private DeviceErrors lastCheckedErrorCode;
         private readonly string deviceNodePrefix;
 
+        private int lastErrorCount = 0;
+
         public VirtualDevice(DeviceClient deviceClient, string opcServerUrl, string deviceNodePrefix)
         {
             client = deviceClient;
@@ -83,18 +85,39 @@ namespace DeviceSdkDemo.Device
         {
             var telemetryData = ReadTelemetryData();
 
-            lastReportedProductionRate = (int)telemetryData["ProductionRate"];
-            lastReportedErrorCode = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
+            // Update the last reported values
+            int currentProductionRate = (int)telemetryData["ProductionRate"];
+            DeviceErrors currentError = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
 
+            // Count the active errors
+            int currentErrorCount = Enum.GetValues(typeof(DeviceErrors))
+                .Cast<DeviceErrors>()
+                .Where(error => error != DeviceErrors.None && (currentError & error) != 0)
+                .Count();
+
+            // Send telemetry data
             await SendTelemetryDataAsync(telemetryData);
 
-            if (lastReportedErrorCode != DeviceErrors.None)
+            // Skip sending error event if the error count decreases
+            if (currentErrorCount < lastErrorCount)
             {
-                await SendDeviceErrorEventAsync(lastReportedErrorCode);
+                Console.WriteLine($"Error count decreased (from {lastErrorCount} to {currentErrorCount}). Skipping error event.");
+            }
+            else if (currentErrorCount > lastErrorCount) // Only send if the error count increases
+            {
+                Console.WriteLine($"Error count increased. Sending error event.");
+                await SendDeviceErrorEventAsync(currentError);
             }
 
+            // Update the last reported error count
+            lastErrorCount = currentErrorCount;
+
+            // Update the device twin
             await UpdateTwinAsync();
         }
+
+
+
 
         private async Task SendTelemetryDataAsync(Dictionary<string, object> telemetryData)
         {
@@ -109,9 +132,7 @@ namespace DeviceSdkDemo.Device
 
             try
             {
-                Console.WriteLine("Sending telemetry...");
                 await client.SendEventAsync(eventMessage);
-                Console.WriteLine("Telemetry sent successfully.");
             }
             catch (Exception ex)
             {
@@ -120,9 +141,20 @@ namespace DeviceSdkDemo.Device
         }
 
 
-        private async Task SendDeviceErrorEventAsync(DeviceErrors error)
+        private async Task SendDeviceErrorEventAsync(DeviceErrors newError)
         {
-            var errorEvent = new { DeviceError = error.ToString() };
+            // Count the number of new errors
+            int newErrorCount = Enum.GetValues(typeof(DeviceErrors))
+                .Cast<DeviceErrors>()
+                .Where(error => error != DeviceErrors.None && (newError & error) != 0)
+                .Count();
+
+            var errorEvent = new
+            {
+                DeviceError = newError.ToString(), // Only send the new error(s)
+                newErrors = newErrorCount      // Include the count of new errors
+            };
+
             var dataString = JsonConvert.SerializeObject(errorEvent);
             var errorMessage = new Message(Encoding.UTF8.GetBytes(dataString))
             {
@@ -131,8 +163,17 @@ namespace DeviceSdkDemo.Device
             };
 
             Console.WriteLine($"Sending error event: {dataString}");
-            await client.SendEventAsync(errorMessage);
+            try
+            {
+                await client.SendEventAsync(errorMessage);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending error event: {ex.Message}");
+            }
         }
+
+
 
         private async Task MonitorDeviceErrorsAsync()
         {
@@ -141,16 +182,25 @@ namespace DeviceSdkDemo.Device
                 var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError").Value ?? 0;
                 var currentErrorCode = (DeviceErrors)Convert.ToInt32(deviceErrorValue);
 
+                // Sprawdzamy tylko zmiany w stanie błędów
                 if (currentErrorCode != lastCheckedErrorCode)
                 {
+                    if (currentErrorCode > DeviceErrors.None)
+                    {
+                        await SendDeviceErrorEventAsync(currentErrorCode);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Device errors cleared. No further action required.");
+                    }
 
-                    await SendDeviceErrorEventAsync(currentErrorCode);
                     lastCheckedErrorCode = currentErrorCode;
                 }
 
                 await Task.Delay(1000);
             }
         }
+
 
 
         #endregion
@@ -263,6 +313,28 @@ namespace DeviceSdkDemo.Device
 
             var result = opcClient.CallMethod($"ns=2;s={deviceNodePrefix}", $"ns=2;s={deviceNodePrefix}/{methodRequest.Name}");
 
+            if (methodRequest.Equals("ResetErrorStatus"))
+            {
+                opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/DeviceError", (int)DeviceErrors.None);
+                lastReportedErrorCode = DeviceErrors.None;
+
+                var reportedProperties = new TwinCollection
+                {
+                    ["DeviceError"] = DeviceErrors.None.ToString(),
+                    ["ProductionRate"] = lastReportedProductionRate
+                };
+                await client.UpdateReportedPropertiesAsync(reportedProperties);
+                Console.WriteLine("Device Twin updated with cleared error status.");
+
+                //_lastResetTime = DateTime.UtcNow;
+
+                await Task.Delay(2000);
+
+                //await new ServiceBusHandler("<ServiceBusConnectionString>", "<IoTHubConnectionString>")
+                    //.ClearQueueAsync("deviceerrorsqueue");
+
+            }
+
             if (result != null)
             {
                 Console.WriteLine($"{methodRequest.Name} executed successfully.");
@@ -276,6 +348,9 @@ namespace DeviceSdkDemo.Device
             string responseJson = JsonConvert.SerializeObject(responsePayload);
             return new MethodResponse(Encoding.UTF8.GetBytes(responseJson), 200);
         }
+
+
+
         #endregion
     }
 }
