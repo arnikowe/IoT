@@ -1,4 +1,5 @@
-﻿using Azure.Messaging.ServiceBus;
+﻿using Azure;
+using Azure.Messaging.ServiceBus;
 using Microsoft.Azure.Devices;
 using Microsoft.Azure.Devices.Shared;
 using System.Text.Json;
@@ -97,22 +98,9 @@ namespace DeviceSdkDemo.Device
             try
             {
                 var messageBody = args.Message.Body.ToString();
-/*
-                if (!messageBody.Contains("\"ErrorCount\""))
-                {
-                    Console.WriteLine($"Message does not contain 'ErrorCount': {messageBody}");
-                    await args.CompleteMessageAsync(args.Message);
-                    return;
-                }*/
 
                 var errorData = JsonSerializer.Deserialize<ErrorData>(messageBody);
 
-                /*if (errorData == null || errorData.ErrorCount <= 0)
-                {
-                    Console.WriteLine($"Invalid ErrorData: {messageBody}");
-                    await args.CompleteMessageAsync(args.Message);
-                    return;
-                }*/
 
                 if (errorData.ErrorCount > 3)
                 {
@@ -176,7 +164,17 @@ namespace DeviceSdkDemo.Device
                 };
 
                 var response = await _serviceClient.InvokeDeviceMethodAsync(deviceId, methodInvocation);
+
                 Console.WriteLine($"EmergencyStop invoked for {deviceId}. Response: {response.Status}");
+
+                try
+                {
+                    await _emailNotificationService.SendErrorNotificationAsync(deviceId, "EmergencyStop");
+                }
+                catch (RequestFailedException emailEx)
+                {
+                    Console.WriteLine($"Error sending email notification for device {deviceId}: {emailEx.Message}");
+                }
 
                 await ClearQueueAsync("deviceerrorsqueue");
             }
@@ -185,6 +183,7 @@ namespace DeviceSdkDemo.Device
                 Console.WriteLine($"Error invoking EmergencyStop for {deviceId}: {ex.Message}");
             }
         }
+
 
         private Task ProcessErrorAsync(ProcessErrorEventArgs args)
         {
