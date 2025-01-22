@@ -1,0 +1,29 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "CommunicationServices_ErrorsMail_name": {
+            "defaultValue": "ErrorsMail",
+            "type": "String"
+        },
+        "emailServices_letterDomain_externalid": {
+            "defaultValue": "/subscriptions/e091439f-dc49-47db-8691-66fc06246b38/resourceGroups/WMII/providers/Microsoft.Communication/emailServices/letterDomain",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Communication/CommunicationServices",
+            "apiVersion": "2023-06-01-preview",
+            "name": "[parameters('CommunicationServices_ErrorsMail_name')]",
+            "location": "global",
+            "properties": {
+                "dataLocation": "Europe",
+                "linkedDomains": [
+                    "[concat(parameters('emailServices_letterDomain_externalid'), '/domains/AzureManagedDomain')]"
+                ]
+            }
+        }
+    ]
+}

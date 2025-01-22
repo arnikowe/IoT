@@ -1,0 +1,92 @@
+-- Oblicza wskaźnik dobrego wyprodukowania (PercentGoodProduction) i przesyła dane do kolejki
+SELECT
+  System.Timestamp() AS WindowEndTime,
+  IoTHub.ConnectionDeviceId AS DeviceId, 
+  COUNT(*) AS TotalMessages, 
+  AVG(
+    CASE 
+      WHEN (GoodCount + BadCount) > 0 
+      THEN CAST(GoodCount AS FLOAT) / (GoodCount + BadCount) 
+      ELSE 0 
+    END
+  ) * 100 AS PercentGoodProduction 
+INTO
+  [productionkpiqueue] 
+FROM
+  [IoTWMII] 
+GROUP BY
+  TumblingWindow(minute, 5),
+  IoTHub.ConnectionDeviceId;
+
+-- Oblicza wskaźnik dobrego wyprodukowania (PercentGoodProduction) i przesyła dane do magazynu danych
+SELECT
+  System.Timestamp() AS WindowEndTime,
+  IoTHub.ConnectionDeviceId AS DeviceId, 
+  COUNT(*) AS TotalMessages, 
+  AVG(
+    CASE 
+      WHEN (GoodCount + BadCount) > 0 
+      THEN CAST(GoodCount AS FLOAT) / (GoodCount + BadCount) 
+      ELSE 0 
+    END
+  ) * 100 AS PercentGoodProduction 
+INTO
+  [production-kpi] 
+FROM
+  [IoTWMII]
+GROUP BY
+  TumblingWindow(minute, 5),
+  IoTHub.ConnectionDeviceId;
+
+
+-- Oblicza minimalną, maksymalną i średnią temperaturę w czasie oraz przesyła dane do magazynu danych
+SELECT
+  System.Timestamp() AS WindowEndTime,
+  IoTHub.ConnectionDeviceId AS DeviceId,
+  MIN(Temperature) AS MinTemperature,
+  MAX(Temperature) AS MaxTemperature,
+  AVG(Temperature) AS AvgTemperature
+INTO
+  [temperature]
+FROM
+  [IoTWMII]
+GROUP BY
+HoppingWindow(minute,5,1), IoTHub.ConnectionDeviceId;
+
+
+-- Sumuje liczbę nowych błędów w ciągu 1-minutowego okna ruchomego i przesyła dane do kolejki, jeśli liczba błędów przekracza 3
+SELECT
+  System.Timestamp() AS WindowEndTime, 
+  IoTHub.ConnectionDeviceId AS DeviceId, 
+  CAST(SUM(newErrors) AS BIGINT) AS ErrorCount 
+INTO
+  [deviceerrorsqueue] 
+FROM
+  [IoTWMII]
+WHERE
+   newErrors IS NOT NULL 
+GROUP BY
+  SlidingWindow(minute, 1),
+  IoTHub.ConnectionDeviceId 
+HAVING SUM(newErrors) >= 3;
+
+-- Sumuje liczbę nowych błędów w ciągu 1-minutowego okna ruchomego i przesyła dane do magazynu danych, jeśli liczba błędów przekracza 3
+SELECT
+  System.Timestamp() AS WindowEndTime, 
+  IoTHub.ConnectionDeviceId AS DeviceId, 
+  CAST(SUM(newErrors) AS BIGINT) AS ErrorCount 
+INTO
+  [device-error] 
+FROM
+  [IoTWMII]
+WHERE
+   newErrors IS NOT NULL 
+GROUP BY
+  SlidingWindow(minute, 1),
+  IoTHub.ConnectionDeviceId 
+HAVING SUM(newErrors) >= 3;
+
+
+
+
+

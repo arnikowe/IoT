@@ -54,7 +54,7 @@ namespace DeviceSdkDemo.Device
                 try
                 {
                     await device.ReadTelemetryAndSendToHubAsync();
-                    await Task.Delay(5000, cancellationToken);
+                    await Task.Delay(1000, cancellationToken);
                 }
                 catch (Exception ex)
                 {

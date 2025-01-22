@@ -1,0 +1,34 @@
+{
+    "name": "IoTJob",
+    "startFile": "Transformation.asaql",
+    "configurations": [
+        {
+            "filePath": "JobConfig.json",
+            "subType": "JobConfig"
+        },
+        {
+            "filePath": "Outputs/device-error.json",
+            "subType": "Output"
+        },
+        {
+            "filePath": "Outputs/production-kpi.json",
+            "subType": "Output"
+        },
+        {
+            "filePath": "Outputs/temperature.json",
+            "subType": "Output"
+        },
+        {
+            "filePath": "Inputs/IoTWMII.json",
+            "subType": "Input"
+        },
+        {
+            "filePath": "Outputs/productionkpiqueue.json",
+            "subType": "Output"
+        },
+        {
+            "filePath": "Outputs/deviceerrorsqueue.json",
+            "subType": "Output"
+        }
+    ]
+}
