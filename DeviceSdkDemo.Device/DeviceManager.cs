@@ -1,9 +1,4 @@
 ﻿using Microsoft.Azure.Devices.Client;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace DeviceSdkDemo.Device
 {
@@ -34,8 +29,6 @@ namespace DeviceSdkDemo.Device
         public async Task RunAsync(CancellationToken cancellationToken)
         {
 
-
-            // Start processing Service Bus messages
             await _serviceBusHandler.StartProcessingAsync();
 
             List<Task> tasks = new List<Task>();
@@ -47,7 +40,6 @@ namespace DeviceSdkDemo.Device
 
             await Task.WhenAll(tasks);
 
-            // Stop processing Service Bus messages
             await _serviceBusHandler.StopProcessingAsync();
         }
 

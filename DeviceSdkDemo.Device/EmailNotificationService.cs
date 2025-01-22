@@ -1,7 +1,6 @@
 ﻿using Azure;
 using Azure.Communication.Email;
-using System;
-using System.Threading.Tasks;
+
 
 namespace DeviceSdkDemo.Device
 {
@@ -13,7 +12,6 @@ namespace DeviceSdkDemo.Device
 
         public EmailNotificationService(string connectionString, string senderEmail, string recipientEmail)
         {
-            // Inicjalizacja właściwej klasy EmailClient z Azure Communication Services
             _emailClient = new EmailClient(connectionString);
             _senderEmail = senderEmail;
             _recipientEmail = recipientEmail;
@@ -26,19 +24,16 @@ namespace DeviceSdkDemo.Device
                 var subject = $"Device Error Notification - {deviceId}";
                 var body = $"An error of type '{errorType}' occurred on device {deviceId}.";
 
-                // Tworzenie treści wiadomości e-mail
                 var emailContent = new EmailContent(subject)
                 {
                     PlainText = body
                 };
 
-                // Konfiguracja wiadomości e-mail
                 var emailMessage = new EmailMessage(_senderEmail, _recipientEmail, emailContent);
 
-                // Wysyłanie wiadomości e-mail za pomocą Azure Communication Services
                 var response = await _emailClient.SendAsync(WaitUntil.Completed, emailMessage);
 
-                Console.WriteLine($"Email sent successfully. Status: {response.UpdateStatus}");
+                Console.WriteLine($"Email sent successfully. ");
             }
             catch (RequestFailedException ex)
             {

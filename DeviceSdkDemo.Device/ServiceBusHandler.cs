@@ -1,10 +1,7 @@
 ﻿using Azure.Messaging.ServiceBus;
 using Microsoft.Azure.Devices;
-using Microsoft.Azure.Devices.Client;
 using Microsoft.Azure.Devices.Shared;
-using System;
 using System.Text.Json;
-using System.Threading.Tasks;
 
 namespace DeviceSdkDemo.Device
 {
@@ -55,8 +52,6 @@ namespace DeviceSdkDemo.Device
             try
             {
                 var receiver = _serviceBusClient.CreateReceiver(queueName);
-                Console.WriteLine($"Clearing messages from queue: {queueName}");
-
                 while (true)
                 {
                     var messages = await receiver.ReceiveMessagesAsync(maxMessages: 10, maxWaitTime: TimeSpan.FromSeconds(1));
@@ -65,7 +60,6 @@ namespace DeviceSdkDemo.Device
                     foreach (var message in messages)
                     {
                         await receiver.CompleteMessageAsync(message);
-                        Console.WriteLine($"Cleared message: {message.Body}");
                     }
                 }
 
@@ -103,24 +97,22 @@ namespace DeviceSdkDemo.Device
             try
             {
                 var messageBody = args.Message.Body.ToString();
-
-                // Walidacja JSON-a
+/*
                 if (!messageBody.Contains("\"ErrorCount\""))
                 {
                     Console.WriteLine($"Message does not contain 'ErrorCount': {messageBody}");
                     await args.CompleteMessageAsync(args.Message);
                     return;
-                }
+                }*/
 
-                // Próba deserializacji
                 var errorData = JsonSerializer.Deserialize<ErrorData>(messageBody);
 
-                if (errorData == null || errorData.ErrorCount <= 0)
+                /*if (errorData == null || errorData.ErrorCount <= 0)
                 {
                     Console.WriteLine($"Invalid ErrorData: {messageBody}");
                     await args.CompleteMessageAsync(args.Message);
                     return;
-                }
+                }*/
 
                 if (errorData.ErrorCount > 3)
                 {
@@ -176,7 +168,6 @@ namespace DeviceSdkDemo.Device
 
         private async Task TriggerEmergencyStopAsync(string deviceId)
         {
-            Console.WriteLine($"Attempting to invoke EmergencyStop for {deviceId}.");
             try
             {
                 var methodInvocation = new CloudToDeviceMethod("EmergencyStop")
