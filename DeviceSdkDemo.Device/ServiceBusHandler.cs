@@ -50,7 +50,7 @@ namespace DeviceSdkDemo.Device
             await _errorsProcessor.StopProcessingAsync();
         }
 
-        private async Task ClearQueueAsync(string queueName)
+        public async Task ClearQueueAsync(string queueName)
         {
             try
             {
@@ -103,43 +103,39 @@ namespace DeviceSdkDemo.Device
             try
             {
                 var messageBody = args.Message.Body.ToString();
-                var errorData = JsonSerializer.Deserialize<ErrorData>(messageBody);
 
-                // Pobieranie Device Twin
-                var twin = await _registryManager.GetTwinAsync(errorData.DeviceId);
-
-                if (twin.Properties.Reported.Contains("DeviceError"))
+                // Walidacja JSON-a
+                if (!messageBody.Contains("\"ErrorCount\""))
                 {
-                    string deviceError = twin.Properties.Reported["DeviceError"];
-                    Console.WriteLine($"Detected error '{deviceError}' for device {errorData.DeviceId}.");
-
-                    // Wysyłanie powiadomienia e-mail
-                    await _emailNotificationService.SendErrorNotificationAsync(errorData.DeviceId, deviceError);
-
-                    // Jeśli urządzenie jest już w stanie EmergencyStop, zakończ przetwarzanie
-                    if (deviceError == "EmergencyStop")
-                    {
-                        Console.WriteLine($"Device {errorData.DeviceId} is already in Emergency Stop state. Skipping further actions.");
-                        await args.CompleteMessageAsync(args.Message);
-                        return;
-                    }
+                    Console.WriteLine($"Message does not contain 'ErrorCount': {messageBody}");
+                    await args.CompleteMessageAsync(args.Message);
+                    return;
                 }
 
-                // Sprawdzanie liczby błędów i wywoływanie EmergencyStop, jeśli potrzeba
+                // Próba deserializacji
+                var errorData = JsonSerializer.Deserialize<ErrorData>(messageBody);
+
+                if (errorData == null || errorData.ErrorCount <= 0)
+                {
+                    Console.WriteLine($"Invalid ErrorData: {messageBody}");
+                    await args.CompleteMessageAsync(args.Message);
+                    return;
+                }
+
                 if (errorData.ErrorCount > 3)
                 {
                     Console.WriteLine($"Error count exceeds threshold. Triggering Emergency Stop for Device ID: {errorData.DeviceId}.");
                     await TriggerEmergencyStopAsync(errorData.DeviceId);
                 }
 
-                // Oznaczenie wiadomości jako przetworzonej
                 await args.CompleteMessageAsync(args.Message);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error processing error message: {ex.Message}");
+                Console.WriteLine($"\nError processing error message: {ex.Message}\nMessage: {args.Message.Body}");
             }
         }
+
 
 
         private async Task DecreaseProductionRateAsync(string deviceId)

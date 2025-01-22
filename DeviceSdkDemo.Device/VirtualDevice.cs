@@ -29,16 +29,28 @@ namespace DeviceSdkDemo.Device
 
         private DeviceErrors lastCheckedErrorCode;
         private readonly string deviceNodePrefix;
+        private readonly EmailNotificationService _emailNotificationService;
 
         private int lastErrorCount = 0;
+        private DateTime _lastResetTime = DateTime.MinValue;
+        private readonly ServiceBusHandler _serviceBusHandler;
 
-        public VirtualDevice(DeviceClient deviceClient, string opcServerUrl, string deviceNodePrefix)
+        private DeviceErrors previousReportedErrorCode = DeviceErrors.None;
+        private int previousReportedProductionRate = 0;
+
+
+        public VirtualDevice(DeviceClient deviceClient, string opcServerUrl, string deviceNodePrefix,
+                             EmailNotificationService emailNotificationService, ServiceBusHandler serviceBusHandler)
         {
             client = deviceClient;
             opcClient = new OpcClient(opcServerUrl);
             opcClient.Connect();
             this.deviceNodePrefix = deviceNodePrefix;
+            _emailNotificationService = emailNotificationService;
+            _serviceBusHandler = serviceBusHandler;
         }
+
+
 
 
 
@@ -51,13 +63,13 @@ namespace DeviceSdkDemo.Device
             {
                 telemetryData["ProductionStatus"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionStatus")?.Value ?? 0;
                 telemetryData["WorkorderId"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/WorkorderId")?.Value ?? string.Empty;
-                telemetryData["ProductionRate"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionRate")?.Value ?? 0;
+                //telemetryData["ProductionRate"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionRate")?.Value ?? 0;
                 telemetryData["GoodCount"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/GoodCount")?.Value ?? 0;
                 telemetryData["BadCount"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/BadCount")?.Value ?? 0;
                 telemetryData["Temperature"] = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/Temperature")?.Value ?? 0.0;
 
-                var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError")?.Value ?? 0;
-                telemetryData["DeviceError"] = ((DeviceErrors)Convert.ToInt32(deviceErrorValue)).ToString();
+                //var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError")?.Value ?? 0;
+                //telemetryData["DeviceError"] = ((DeviceErrors)Convert.ToInt32(deviceErrorValue)).ToString();
 
                 if ((int)telemetryData["ProductionStatus"] == 0)
                 {
@@ -70,51 +82,94 @@ namespace DeviceSdkDemo.Device
                 // Assign default values in case of failure
                 telemetryData["ProductionStatus"] = 0;
                 telemetryData["WorkorderId"] = string.Empty;
-                telemetryData["ProductionRate"] = 0;
+                //telemetryData["ProductionRate"] = 0;
                 telemetryData["GoodCount"] = 0;
                 telemetryData["BadCount"] = 0;
                 telemetryData["Temperature"] = 0.0;
-                telemetryData["DeviceError"] = DeviceErrors.Unknown.ToString();
+                //telemetryData["DeviceError"] = DeviceErrors.Unknown.ToString();
             }
 
             return telemetryData;
         }
+        private DeviceErrors ReadDeviceError()
+        {
+            try
+            {
+                // Odczyt wartości błędu z OPC UA
+                var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError")?.Value ?? 0;
+                return (DeviceErrors)Convert.ToInt32(deviceErrorValue);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading DeviceError: {ex.Message}");
+                return DeviceErrors.Unknown; // Domyślna wartość w przypadku błędu
+            }
+        }
+        private int ReadProductionRate()
+        {
+            try
+            {
+                // Odczyt wartości ProductionRate z OPC UA
+                var productionRateValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/ProductionRate")?.Value ?? 0;
+                return Convert.ToInt32(productionRateValue);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading ProductionRate: {ex.Message}");
+                return previousReportedProductionRate; // Zwróć poprzednią wartość w przypadku błędu
+            }
+        }
+
 
 
         public async Task ReadTelemetryAndSendToHubAsync()
         {
-            var telemetryData = ReadTelemetryData();
+            var telemetryData = ReadTelemetryData(); // Odczyt danych telemetrycznych
+            await SendTelemetryDataAsync(telemetryData);
+            // Osobny odczyt DeviceError
+            var currentError = ReadDeviceError();
+            var productionRate = ReadProductionRate();
+            // Wysyłanie telemetrii (bez DeviceError)
+            
 
-            // Update the last reported values
-            int currentProductionRate = (int)telemetryData["ProductionRate"];
-            DeviceErrors currentError = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
+            // Obsługa zdarzeń błędów
+            await HandleErrorEvents(currentError);
 
-            // Count the active errors
+            // Aktualizacja Device Twin
+            await UpdateTwinAsync(productionRate);
+        }
+
+
+        private async Task HandleErrorEvents(DeviceErrors currentError)
+        {
+            // Liczba aktywnych błędów
             int currentErrorCount = Enum.GetValues(typeof(DeviceErrors))
                 .Cast<DeviceErrors>()
                 .Where(error => error != DeviceErrors.None && (currentError & error) != 0)
                 .Count();
 
-            // Send telemetry data
-            await SendTelemetryDataAsync(telemetryData);
+            // Aktualizuj Device Twin tylko raz
+            await UpdateTwinAsync(lastReportedProductionRate);
 
-            // Skip sending error event if the error count decreases
-            if (currentErrorCount < lastErrorCount)
-            {
-                Console.WriteLine($"Error count decreased (from {lastErrorCount} to {currentErrorCount}). Skipping error event.");
-            }
-            else if (currentErrorCount > lastErrorCount) // Only send if the error count increases
+            // Jeśli liczba błędów wzrosła, wyślij zdarzenie
+            if (currentErrorCount > lastErrorCount)
             {
                 Console.WriteLine($"Error count increased. Sending error event.");
                 await SendDeviceErrorEventAsync(currentError);
             }
+            else if (currentErrorCount < lastErrorCount)
+            {
+                Console.WriteLine($"Error count decreased (from {lastErrorCount} to {currentErrorCount}).");
+            }
 
-            // Update the last reported error count
+            // Aktualizacja liczby błędów
             lastErrorCount = currentErrorCount;
 
-            // Update the device twin
-            await UpdateTwinAsync();
+            // Aktualizacja `lastReportedErrorCode` na podstawie aktualnych błędów
+            lastReportedErrorCode = currentError;
         }
+
+
 
 
 
@@ -143,16 +198,17 @@ namespace DeviceSdkDemo.Device
 
         private async Task SendDeviceErrorEventAsync(DeviceErrors newError)
         {
-            // Count the number of new errors
-            int newErrorCount = Enum.GetValues(typeof(DeviceErrors))
+            // Wyodrębnij nazwy aktywnych błędów jako listę
+            var activeErrors = Enum.GetValues(typeof(DeviceErrors))
                 .Cast<DeviceErrors>()
                 .Where(error => error != DeviceErrors.None && (newError & error) != 0)
-                .Count();
+                .Select(error => error.ToString())
+                .ToList();
 
             var errorEvent = new
             {
-                DeviceError = newError.ToString(), // Only send the new error(s)
-                newErrors = newErrorCount      // Include the count of new errors
+                DeviceError = activeErrors, // Lista błędów
+                newErrors = activeErrors.Count
             };
 
             var dataString = JsonConvert.SerializeObject(errorEvent);
@@ -166,6 +222,14 @@ namespace DeviceSdkDemo.Device
             try
             {
                 await client.SendEventAsync(errorMessage);
+                Console.WriteLine("Error event sent successfully.");
+
+                // Wyślij powiadomienie e-mail dla błędów
+                foreach (var error in activeErrors)
+                {
+                    await _emailNotificationService.SendErrorNotificationAsync(deviceNodePrefix, error);
+                    Console.WriteLine($"Error notification sent for: {error}");
+                }
             }
             catch (Exception ex)
             {
@@ -175,31 +239,32 @@ namespace DeviceSdkDemo.Device
 
 
 
-        private async Task MonitorDeviceErrorsAsync()
-        {
-            while (true)
-            {
-                var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError").Value ?? 0;
-                var currentErrorCode = (DeviceErrors)Convert.ToInt32(deviceErrorValue);
 
-                // Sprawdzamy tylko zmiany w stanie błędów
-                if (currentErrorCode != lastCheckedErrorCode)
-                {
-                    if (currentErrorCode > DeviceErrors.None)
-                    {
-                        await SendDeviceErrorEventAsync(currentErrorCode);
-                    }
-                    else
-                    {
-                        Console.WriteLine("Device errors cleared. No further action required.");
-                    }
+        /* private async Task MonitorDeviceErrorsAsync()
+         {
+             while (true)
+             {
+                 var deviceErrorValue = opcClient.ReadNode($"ns=2;s={deviceNodePrefix}/DeviceError").Value ?? 0;
+                 var currentErrorCode = (DeviceErrors)Convert.ToInt32(deviceErrorValue);
 
-                    lastCheckedErrorCode = currentErrorCode;
-                }
+                 // Sprawdzamy tylko zmiany w stanie błędów
+                 if (currentErrorCode != lastCheckedErrorCode)
+                 {
+                     if (currentErrorCode > DeviceErrors.None)
+                     {
+                         await SendDeviceErrorEventAsync(currentErrorCode);
+                     }
+                     else
+                     {
+                         Console.WriteLine("Device errors cleared. No further action required.");
+                     }
 
-                await Task.Delay(1000);
-            }
-        }
+                     lastCheckedErrorCode = currentErrorCode;
+                 }
+
+                 await Task.Delay(1000);
+             }
+         }*/
 
 
 
@@ -219,32 +284,29 @@ namespace DeviceSdkDemo.Device
             await client.SetDesiredPropertyUpdateCallbackAsync(OnDesiredPropertyChanged, null);
             //await InitializeTwinOnStartAsync();
 
-            _ = MonitorDeviceErrorsAsync();
+            //_ = MonitorDeviceErrorsAsync();
         }
         private async Task OnDesiredPropertyChanged(TwinCollection desiredProperties, object userContext)
         {
             Console.WriteLine("Desired properties update received.");
 
             bool twinUpdated = false;
+            var reportedProperties = new TwinCollection();
 
+            // Obsługa zmiany ProductionRate
             if (desiredProperties.Contains("ProductionRate"))
             {
-                int rate = (int)desiredProperties["ProductionRate"];
-                opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/ProductionRate", rate);
-                lastReportedProductionRate = rate;
-                Console.WriteLine($"ProductionRate updated to: {rate}");
-                twinUpdated = true;
-            }
+                int desiredRate = (int)desiredProperties["ProductionRate"];
+                opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/ProductionRate", desiredRate);
+                lastReportedProductionRate = desiredRate;
 
+                reportedProperties["ProductionRate"] = desiredRate;
+                twinUpdated = true;
+                Console.WriteLine($"ProductionRate updated to: {desiredRate}");
+            }
 
             if (twinUpdated)
             {
-                var reportedProperties = new TwinCollection
-                {
-                    ["DeviceError"] = (int)lastReportedErrorCode,
-                    ["ProductionRate"] = lastReportedProductionRate
-                };
-
                 try
                 {
                     await client.UpdateReportedPropertiesAsync(reportedProperties);
@@ -256,6 +318,7 @@ namespace DeviceSdkDemo.Device
                 }
             }
         }
+
         private async Task<int> ReadDesiredRateIfExistsAsync()
         {
             var twin = await client.GetTwinAsync();
@@ -270,40 +333,95 @@ namespace DeviceSdkDemo.Device
         {
             int desiredInitialRate = await ReadDesiredRateIfExistsAsync();
             opcClient.WriteNode($"ns=2;s={deviceNodePrefix}/ProductionRate", desiredInitialRate);
+
+            // Pobierz istniejący ProductionRate z Device Twin
+            var twin = await client.GetTwinAsync();
+            if (twin.Properties.Reported.Contains("ProductionRate"))
+            {
+                previousReportedProductionRate = (int)twin.Properties.Reported["ProductionRate"];
+            }
+            else
+            {
+                previousReportedProductionRate = desiredInitialRate;
+            }
+
             var initialReportedProperties = new TwinCollection
             {
                 ["DeviceError"] = DeviceErrors.None.ToString(),
                 ["ProductionRate"] = desiredInitialRate
             };
             await client.UpdateReportedPropertiesAsync(initialReportedProperties);
+
+            Console.WriteLine($"Initialized Twin - ProductionRate: {desiredInitialRate}, DeviceError: None");
         }
+
         private void UpdateLocalState()
         {
+            // Odczyt danych telemetrycznych
             var telemetryData = ReadTelemetryData();
-            lastReportedProductionRate = (int)telemetryData["ProductionRate"];
-            lastReportedErrorCode = (DeviceErrors)Enum.Parse(typeof(DeviceErrors), telemetryData["DeviceError"].ToString());
+
+            // Pobranie ProductionRate w sposób niezależny
+            lastReportedProductionRate = ReadProductionRate();
+
+            // Pobranie DeviceError w sposób niezależny
+            lastReportedErrorCode = ReadDeviceError();
+
             Console.WriteLine($"Local state updated: ProductionRate={lastReportedProductionRate}, DeviceError={lastReportedErrorCode}");
         }
-        public async Task UpdateTwinAsync()
+
+        public async Task UpdateTwinAsync(int productionRate)
         {
-            UpdateLocalState();
+            var updatedProperties = new TwinCollection();
 
-            var reportedProperties = new TwinCollection
-            {
-                ["DeviceError"] = lastReportedErrorCode.ToString(),
-                ["ProductionRate"] = lastReportedProductionRate
-            };
+            // Wyodrębnij listę aktywnych błędów
+            var activeErrors = Enum.GetValues(typeof(DeviceErrors))
+                .Cast<DeviceErrors>()
+                .Where(error => error != DeviceErrors.None && (lastReportedErrorCode & error) != 0)
+                .Select(error => error.ToString())
+                .ToList();
 
-            try
+            var newDeviceErrorState = activeErrors.Count > 0
+                ? string.Join(", ", activeErrors)
+                : "None";
+
+            // Aktualizacja DeviceError tylko przy zmianie
+            if (newDeviceErrorState != previousReportedErrorCode.ToString())
             {
-                await client.UpdateReportedPropertiesAsync(reportedProperties);
-                Console.WriteLine("Device Twin reported properties updated successfully.");
+                updatedProperties["DeviceError"] = newDeviceErrorState;
+                previousReportedErrorCode = lastReportedErrorCode; // Aktualizuj enum
+                Console.WriteLine($"Updating Device Twin - DeviceError: {newDeviceErrorState}");
             }
-            catch (Exception ex)
+
+            // Aktualizacja ProductionRate tylko przy zmianie
+            if (productionRate != previousReportedProductionRate)
             {
-                Console.WriteLine($"Error updating Device Twin: {ex.Message}");
+                updatedProperties["ProductionRate"] = productionRate;
+                previousReportedProductionRate = productionRate;
+                Console.WriteLine($"Updating Device Twin - ProductionRate: {productionRate}");
+            }
+
+            // Aktualizacja Device Twin tylko przy zmianach
+            if (updatedProperties.Count > 0)
+            {
+                try
+                {
+                    await client.UpdateReportedPropertiesAsync(updatedProperties);
+                    Console.WriteLine($"Device Twin updated: {JsonConvert.SerializeObject(updatedProperties)}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error updating Device Twin: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("No changes detected. Skipping Device Twin update.");
             }
         }
+
+
+
+
         #endregion
 
         #region Direct Methods
@@ -331,7 +449,7 @@ namespace DeviceSdkDemo.Device
                 await Task.Delay(2000);
 
                 //await new ServiceBusHandler("<ServiceBusConnectionString>", "<IoTHubConnectionString>")
-                    //.ClearQueueAsync("deviceerrorsqueue");
+                //.ClearQueueAsync("deviceerrorsqueue");
 
             }
 
@@ -343,11 +461,13 @@ namespace DeviceSdkDemo.Device
             {
                 Console.WriteLine($"Failed to execute {methodRequest.Name}.");
             }
-
+             await _serviceBusHandler.ClearQueueAsync("deviceerrorsqueue");
+            Console.WriteLine("Error queue cleared successfully.");
             var responsePayload = new { message = $"{methodRequest.Name} executed successfully" };
             string responseJson = JsonConvert.SerializeObject(responsePayload);
             return new MethodResponse(Encoding.UTF8.GetBytes(responseJson), 200);
         }
+
 
 
 

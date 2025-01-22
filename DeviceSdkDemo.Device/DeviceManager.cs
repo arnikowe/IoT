@@ -13,17 +13,23 @@ namespace DeviceSdkDemo.Device
         private readonly ServiceBusHandler _serviceBusHandler;
 
         public DeviceManager(IEnumerable<(string connectionString, string opcServerUrl, string deviceNodePrefix)> deviceConfigurations,
-                             string serviceBusConnectionString, string iotHubConnectionString,string emailConnectionString, string senderEmail,string recipientEmail)
+                     string serviceBusConnectionString, string iotHubConnectionString,
+                     string emailConnectionString, string senderEmail, string recipientEmail)
         {
             _devices = new List<VirtualDevice>();
-            _serviceBusHandler = new ServiceBusHandler(serviceBusConnectionString, iotHubConnectionString,emailConnectionString, senderEmail, recipientEmail);
+            _serviceBusHandler = new ServiceBusHandler(serviceBusConnectionString, iotHubConnectionString, emailConnectionString, senderEmail, recipientEmail);
+
+            var emailNotificationService = new EmailNotificationService(emailConnectionString, senderEmail, recipientEmail);
 
             foreach (var config in deviceConfigurations)
             {
                 var deviceClient = DeviceClient.CreateFromConnectionString(config.connectionString);
-                _devices.Add(new VirtualDevice(deviceClient, config.opcServerUrl, config.deviceNodePrefix));
+                _devices.Add(new VirtualDevice(deviceClient, config.opcServerUrl, config.deviceNodePrefix,
+                                               emailNotificationService, _serviceBusHandler));
             }
         }
+
+
 
         public async Task RunAsync(CancellationToken cancellationToken)
         {
@@ -56,7 +62,7 @@ namespace DeviceSdkDemo.Device
                 try
                 {
                     await device.ReadTelemetryAndSendToHubAsync();
-                    await Task.Delay(10000, cancellationToken);
+                    await Task.Delay(5000, cancellationToken);
                 }
                 catch (Exception ex)
                 {
