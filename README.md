@@ -247,7 +247,8 @@ Jeśli wywołasz metodę, która nie istnieje lub popełnisz błąd w słowie kl
 
 Przykład wiadomości z konsoli po wywołaniu: 
 ```java
- Unknown method executed: test on Device 2```
+ Unknown method executed: test on Device 2
+```
 
 ## Kalkulacje
 W projekcie istnieją 3 typy obliczeń, które działają z danymi z IoT Hub:
@@ -284,7 +285,8 @@ Oto przykład zawartości blobu:
 ```java
 {"WindowEndTime":"2025-01-22T19:30:00.0000000Z","DeviceId":"Device1","TotalMessages":6,"PercentGoodProduction":91.31766978541171}
 {"WindowEndTime":"2025-01-22T19:30:00.0000000Z","DeviceId":"Device2","TotalMessages":6,"PercentGoodProduction":92.12336184110377}
-{"WindowEndTime":"2025-01-22T19:30:00.0000000Z","DeviceId":"Device3","TotalMessages":6,"PercentGoodProduction":74.94772176975567}```
+{"WindowEndTime":"2025-01-22T19:30:00.0000000Z","DeviceId":"Device3","TotalMessages":6,"PercentGoodProduction":74.94772176975567}
+```
 
 Właściwości GoodCount i BadCount każdego urządzenia są przesyłane jako dane telemetryczne do IoTHub w Azure. Za pomocą specjalnego zapytania w usłudze ASA wartości te są wykorzystywane do obliczenia procentowego udziału dobrej produkcji w stosunku do całkowitej produkcji w 5-minutowych oknach czasowych. Jeśli obliczony wynik spadnie poniżej 90%, dane te są przesyłane i zapisywane w kolejce ServiceBus Queue.
 
@@ -306,7 +308,8 @@ FROM
   [IoTHuBWMII]
 GROUP BY
 HoppingWindow(minute,5,1), IoTHub.ConnectionDeviceId;
-Wyniki są przechowywane w blobach kontenera pomiarów `temperature`.```
+Wyniki są przechowywane w blobach kontenera pomiarów `temperature`.
+```
 
 Oto przykład zawartości bloba:
 ```java
@@ -320,7 +323,8 @@ Oto przykład zawartości bloba:
 {"WindowEndTime":"2025-01-21T09:31:00.0000000Z","DeviceId":"Device2","MinTemperature":60.99078764064969,"MaxTemperature":85.16475782974366,"AvgTemperature":71.90486001467175}
 {"WindowEndTime":"2025-01-21T09:31:00.0000000Z","DeviceId":"Device3","MinTemperature":24.252472512486502,"MaxTemperature":106.07351842328333,"AvgTemperature":78.5757932241112}
 {"WindowEndTime":"2025-01-21T09:32:00.0000000Z","DeviceId":"Device1","MinTemperature":60.04030317615731,"MaxTemperature":80.97473024841192,"AvgTemperature":70.97393708283586}
-{"WindowEndTime":"2025-01-21T09:32:00.0000000Z","DeviceId":"Device2","MinTemperature":60.99078764064969,"MaxTemperature":85.16475782974366,"AvgTemperature":72.00405079626837}```
+{"WindowEndTime":"2025-01-21T09:32:00.0000000Z","DeviceId":"Device2","MinTemperature":60.99078764064969,"MaxTemperature":85.16475782974366,"AvgTemperature":72.00405079626837}
+```
 
 Wartości właściwości Temperature dla każdego urządzenia są przesyłane jako dane telemetryczne do IoTHub w Azure. Co minutę, specjalne zapytanie w usłudze ASA wykorzystuje te dane do obliczenia średniej, minimalnej oraz maksymalnej temperatury z ostatnich pięciu minut.
 
@@ -343,7 +347,8 @@ WHERE
 GROUP BY
   SlidingWindow(minute, 1),
   IoTHub.ConnectionDeviceId 
-HAVING SUM(newErrors) >= 3;```
+HAVING SUM(newErrors) >= 3;
+```
 
 Wyniki są przechowywane w blobach kontenera `device-error` i `deviceerrorsqueue`.
 
@@ -367,7 +372,8 @@ Na podstawie danych znajdujących się w kolejce ServiceBus Queue, które zawier
 
 Przykładowy komunikat wyświetlany na konsoli:
 ```java
-Production rate decreased for Device1. New desired rate: 30```
+Production rate decreased for Device1. New desired rate: 30
+```
 
 ### Wywołanie metody EmergencyStop
 
@@ -392,3 +398,4 @@ Przykładowa treść e-maila:
 Wiadomość o wysłaniu maila wyświetlana na konsoli:
 ```java
 Email sent successfully.
+```
